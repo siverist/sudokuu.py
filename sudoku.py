@@ -1,8 +1,89 @@
 import tkinter as tk
 import re
 import time
+import random 
 from tkinter import messagebox
 from tkinter import ttk
+import copy
+import pygame 
+
+
+class SudokuGenerator:
+    def __init__(self):
+        self.grid = [[0 for _ in range(9)] for _ in range(9)]
+
+    def is_valid(self, grid, row, col, num):
+        for i in range(9):
+            if grid[row][i] == num or grid[i][col] == num:
+                return False
+        start_row, start_col = 3 * (row // 3), 3 * (col // 3)
+        for i in range(3):
+            for j in range(3):
+                if grid[start_row + i][start_col + j] == num:
+                    return False
+        return True
+
+    def fill_grid(self, grid):
+        #fills the whole grid
+        for row in range(9):
+            for col in range(9):
+                if grid[row][col] == 0:
+                    nums = list(range(1, 10))
+                    random.shuffle(nums)
+                    for num in nums:
+                        if self.is_valid(grid, row, col, num):
+                            grid[row][col] = num
+                            if self.fill_grid(grid):
+                                return True
+                            grid[row][col] = 0
+                    return False
+        return True
+
+    def solve_count(self, grid):
+        #checks solutions
+        solutions = [0]
+
+        def backtrack():
+            for r in range(9):
+                for c in range(9):
+                    if grid[r][c] == 0:
+                        for n in range(1, 10):
+                            if self.is_valid(grid, r, c, n):
+                                grid[r][c] = n
+                                backtrack()
+                                grid[r][c] = 0
+                        return
+            solutions[0] += 1
+        backtrack()
+        return solutions[0]
+
+    def remove_numbers(self, grid, holes=40):
+        #removes numbers
+        grid = copy.deepcopy(grid)
+        attempts = holes
+        while attempts > 0:
+            row, col = random.randint(0, 8), random.randint(0, 8)
+            while grid[row][col] == 0:
+                row, col = random.randint(0, 8), random.randint(0, 8)
+            backup = grid[row][col]
+            grid[row][col] = 0
+
+            # Zkontroluj, že sudoku má stále JEDNO řešení
+            if self.solve_count(grid) != 1:
+                grid[row][col] = backup  # Vrať číslo zpět
+                attempts -= 1
+            else:
+                attempts -= 1
+        return grid
+
+    def generate(self, holes=40):
+        self.grid = [[0 for _ in range(9)] for _ in range(9)]
+        self.fill_grid(self.grid)
+        self.full_solution = copy.deepcopy(self.grid)
+        puzzle = self.remove_numbers(self.full_solution, holes)
+        return puzzle
+
+
 
 
 #GUI
@@ -13,6 +94,7 @@ class SudokuGUI:
         self.master.bind_all("<Key>", self.handle_key)
         self.master.bind("<Button-1>", self.global_click)
         self.master.bind("<Button-3>", self.clear_selection)
+
 
         # Game state variables
         self.currentNumber = None
@@ -25,7 +107,17 @@ class SudokuGUI:
         self.pencilMode = False
         self.color = "#73AFCF"
         self.gameStarted = False
+        self.generator = SudokuGenerator()
+        self.difficulty = 0
+        self.music = True
+        self.volume = 0.5
 
+        #music
+        pygame.mixer.init()
+        pygame.mixer.music.load("sudokuu.py/music.mp3")
+        pygame.mixer.music.set_volume(self.volume)  # výchozí hlasitost 50 %
+        pygame.mixer.music.play(-1)
+        
         # Ttk styles
         self.style = ttk.Style()
         self.style.configure("numbers.TButton", padding=(0,32), width=6, relief="flat", background="#022132", fg= "#022132",font=("SF Pro Display", 22))
@@ -113,20 +205,33 @@ class SudokuGUI:
             text = "Do you want to continue or start a new game?"
             buttons = {
                 "Continue previous game": lambda:self.continue_game(),
-                "Start a new game" : lambda:self.setup_game_screen()
+                "Start a new game" : lambda:self.choose_difficulty()
             }
             self.popup("Start Game", text, buttons)
 
         else:
             self.mode = mode
-            self.setup_game_screen()
-            self.gameStarted = True
+            self.choose_difficulty()
 
     def continue_game(self):
         self.menu_frame.pack_forget()
         self.resume_timer()
         self.game_frame.pack(fill="both", expand=True)
+
+    def choose_difficulty(self):
+        text = "Which difficulty do you want?"
+        buttons = {
+            "Easy": lambda: self.start_with_difficulty(30),
+            "Medium": lambda: self.start_with_difficulty(45),
+            "Hard": lambda: self.start_with_difficulty(60)
+        }
+        self.popup("Choose Difficulty", text, buttons)
         
+    def start_with_difficulty(self, difficulty):
+        self.difficulty = difficulty
+        self.gameStarted = True
+        self.setup_game_screen()
+
 
     def setup_game_screen(self):
         self.menu_frame.pack_forget()
@@ -153,16 +258,19 @@ class SudokuGUI:
             controls0,
             text="See Solved/Done",
             style="game.TButton",
+            command=self.see_solution,
         ).grid(row=0, column=0, padx=10)
         ttk.Button(
             controls0,
             text="Check Numbers",
             style="game.TButton",
+            command=self.check_numbers,
         ).grid(row=0, column=1, padx=10)
         ttk.Button(
             controls0,
             text="Start Over",
             style="game.TButton",
+            command=self.start_over,
         ).grid(row=0, column=2, padx=10)
 
 
@@ -209,6 +317,10 @@ class SudokuGUI:
                 cell.pack(fill="both", expand=True)
                 cell.bind("<Button-1>", lambda e, r=row, c=col: self.cell_clicked(r, c))
                 self.cells[(row, col)] = cell
+
+        self.puzzle = self.generator.generate(holes = self.difficulty)
+        self.generate_puzzle()
+
 
         # ---------------- Number pad and pencil and clear----------------
         pad_frame = tk.Frame(main_frame, bg=self.color,)
@@ -274,6 +386,16 @@ class SudokuGUI:
             self.inputMode = "number_first"
         self.clear_selection()
 
+    def generate_puzzle(self):
+        # === FILL GRID WITH GENERATED NUMBERS ===
+        for row in range(9):
+            for col in range(9):
+                value = self.puzzle[row][col]
+                if value != 0:
+                    self.cells[(row, col)].config(text=str(value), fg="black")
+                else:
+                    self.cells[(row, col)].config(text="", fg="gray")
+
     # ---------------- NUMBER PAD ----------------
     def create_number_pad(self, frame):
         btn_frame = tk.Frame(frame, bg=self.color)
@@ -324,15 +446,83 @@ class SudokuGUI:
                     self.place_number_in_selected(num)
             self.check_errors()
 
+    #other button functions
+
+    def see_solution(self):
+        text = "Do you want to give up?"
+        buttons = {
+                "See Solution": lambda:self.solution(),
+        }
+        self.popup("See Solution", text, buttons)
+        self.full_solution = self.generator.grid
+
+    def solution(self):
+        for row in range(9):
+             for col in range(9):
+                value =self.full_solution[row][col]
+                if value != 0:
+                    self.cells[(row, col)].config(text=str(value), fg="black")
+                else:
+                    self.cells[(row, col)].config(text="", fg="gray")
+
+    def start_over(self):
+        text = "Do you want to start this puzzle over or get a new one?"
+        buttons = {
+                "Erase My Numbers": lambda:self.generate_puzzle(),
+                "New Game": lambda:self.setup_game_screen(),
+        }
+        self.popup("See Solution", text, buttons)
+        self.full_solution = self.generator.grid
+
+    def check_numbers(self):
+        self.full_solution = self.generator.grid
+        all_correct = True
+        for row in range(9):
+            for col in range(9):
+                cell = self.cells[(row, col)]
+                cell_text = cell.cget("text").strip()
+            
+                # ignore empty cells
+                if not cell_text or cell_text == "0":
+                    continue
+                
+                font = cell.cget("font")
+                if isinstance(font, tuple):
+                    font_size = font[1]
+                else:
+                    font_size = int(re.search(r'\d+', font).group())
+                
+                # ignore pencil marks
+                if font_size < 10:
+                    continue
+
+                try:
+                    value = int(cell_text)
+                except ValueError:
+                    continue
+                if value != self.full_solution[row][col]:
+                    all_correct = False
+                    break
+            if not all_correct:
+                break
+
+        if all_correct:
+            messagebox.showinfo("Check", "Every number is right so far!")
+        else:
+            messagebox.showinfo("Check", "Oh no! You made a mistake somewhere")
+
+
+
     # ---------------- PENCIL MODE ----------------
     def toggle_pencilMode(self):
         self.pencilMode = not self.pencilMode
+        self.master.config(cursor="pencil" if self.pencilMode == True else "hand2")
 
     def toggle_pencil_number(self, row, col, num):
         """Toggle a pencil number in a cell. If num=0, clear all pencil marks."""
         cell = self.cells[(row, col)]
         if num == 0:
-            cell.config(text="", font=("SF Pro Display", 25), width=2, height=1, fg="black")
+            cell.config(text="", font=("SF Pro Display", 25), width=2, height=1)
             return
 
         current_text = cell.cget("text")
@@ -382,7 +572,7 @@ class SudokuGUI:
                 if self.currentNumber == 0:
                     cell.config(text="", font=("SF Pro Display", 25))
                 else:
-                    cell.config(text=str(self.currentNumber), font=("SF Pro Display", 25))
+                    cell.config(text=str(self.currentNumber), font=("SF Pro Display", 25),  width=2, height=1)
             self.check_errors()
         else:
             self.toggle_cell_selection(row, col)
@@ -405,7 +595,7 @@ class SudokuGUI:
 
     def global_click(self, event):
         widget = event.widget
-        if not isinstance(widget, tk.Label) and not isinstance(widget, tk.Button) and not isinstance(widget, tk.Canvas) and not isinstance(widget, ttk.Button):
+        if not isinstance(widget, (tk.Label, tk.Button, tk.Canvas, ttk.Button)):
             self.clear_selection()
 
     def place_number_in_selected(self, num):
@@ -503,7 +693,75 @@ class SudokuGUI:
 
     # Settings
     def settings_popup(self):
-        self.popup("Settings")
+
+        # --- Music toggle function ---
+        def toggle_music():
+            if self.music:
+                pygame.mixer.music.pause()
+                self.music = False
+                toggle_btn.config(text="Turn Music On")
+            else:
+                pygame.mixer.music.unpause()
+                self.music = True
+                toggle_btn.config(text="Turn Music Off")
+
+        # --- Volume control function ---
+        def set_volume(val):
+            volume = float(val)
+            self.volume = volume/100
+            pygame.mixer.music.set_volume(self.volume)
+
+        # --- Create popup using your existing popup() function ---
+        self.popup("Settings", "Settings:", close = False)
+
+        # --- Access the last opened popup (your popup creates a new Toplevel) ---
+        popup = self.master.winfo_children()[-1]
+
+        # --- Find scroll_frame (3 layers deep inside popup structure) ---
+        # container -> canvas -> scroll_frame
+        container = popup.winfo_children()[0]
+        canvas = container.winfo_children()[0]
+        scroll_frame = canvas.winfo_children()[0]
+
+        # --- On/Off button ---
+        toggle_btn = ttk.Button(
+            scroll_frame,
+            text="Turn Music Off" if self.music else "Turn Music On",
+            style="game.TButton",
+            command=toggle_music
+        )
+        toggle_btn.pack(pady=10)
+
+        # --- Volume slider ---
+        volume_slider = tk.Scale(
+            scroll_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            resolution=0.05,
+            length=250,
+            bg=self.color,
+            fg="white",
+            highlightthickness=0,
+            troughcolor="#022132",
+            command=set_volume
+        )
+        volume_slider.set(self.volume*100)
+        volume_slider.pack(pady=5)
+
+        def close_popup():
+            popup.destroy()
+            self.resume_timer()
+
+    
+        ttk.Button(
+            scroll_frame,
+            text="Close",
+            style="game.TButton",
+            command=close_popup
+        ).pack(pady=10)
+
+
 
 
     # ---------------- RULES POPUP ----------------
@@ -524,7 +782,7 @@ class SudokuGUI:
         self.popup("Rules", rules_text)
         self.pauseTimer()
 
-    def popup(self, title, message, buttons=None):
+    def popup(self, title, message, buttons=None, close = True):
         popup = tk.Toplevel(self.master)
         popup.title(title)
         popup.geometry("600x400")
@@ -583,12 +841,14 @@ class SudokuGUI:
         def close_popup():
             popup.destroy()
             self.resume_timer()
-        ttk.Button(
-            btn_frame,
-            text="Close",
-            style="game.TButton",
-            command=close_popup
-         ).pack(pady=10)
+
+        if close:
+            ttk.Button(
+                btn_frame,
+                text="Close",
+                style="game.TButton",
+                command=close_popup
+            ).pack(pady=10)
 
 
 # ---------------- RUN GAME ----------------
@@ -599,4 +859,4 @@ if __name__ == "__main__":
     app = SudokuGUI(root)
     root.mainloop()
 
-    # add music and settings :))
+    # czech and special rules :))
